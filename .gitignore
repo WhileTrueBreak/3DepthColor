@@ -3,6 +3,7 @@ bin/*
 lib64
 pyvenv.cfg
 man/
+Scripts/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

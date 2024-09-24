@@ -255,12 +255,12 @@ if __name__ == '__main__':
     args = argparser.parse_args()
 
     numFilaments = args.filaments
-
     path = args.image
+
     filename = os.path.basename(path).split('.')[0]
     img = cv2.imread(path)
+    img = cv2.flip(img, 0)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)/255
-    img = np.flipud(img)
 
     h, w, _ = img.shape
     if w*h > 2000000: img = scaleImg(img, 2000000)
@@ -283,7 +283,8 @@ if __name__ == '__main__':
     scaleVertices(vertices, MAX_WIDTH, MAX_HEIGHT)
 
     print("Simplifying mesh...")
-    simVerts, simFaces = simplfyMesh(vertices, faces)
+    # simVerts, simFaces = simplfyMesh(vertices, faces)
+    simVerts, simFaces = vertices, faces
     print(f"Simplified {vertices.shape[0]} -> {simVerts.shape[0]} vertices")
     print(f"Simplified {faces.shape[0]} -> {simFaces.shape[0]} faces")
 

@@ -6,9 +6,11 @@ import time
 import numpy as np
 import itertools
 import colorsys
+import argparse
 from skimage import io, color
 from sklearn.cluster import KMeans
 from scipy.optimize import minimize
+from concurrent.futures import ThreadPoolExecutor
 import matplotlib.pyplot as plt
 
 def colorRatioSolver(color, p1, p2):
@@ -156,11 +158,28 @@ def colorDiff(c1, c2):
 def colorPlot(img, palette):
     img = scaleImg(img, 1000)
     pixels = np.clip(np.reshape(img, (img.shape[0]*img.shape[1], 3)),0,1)
+
+    pixelsLAB = np.apply_along_axis(color.rgb2lab, 1, pixels)
+    palette = np.apply_along_axis(color.rgb2lab, 1, palette)
+
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(pixels[:,0], pixels[:,1], pixels[:,2], c=pixels)
-    ax.scatter([c[0] for c in palette], [c[1] for c in palette], [c[2] for c in palette], color=(0,0,0))
-    ax.plot([c[0] for c in palette], [c[1] for c in palette], [c[2] for c in palette], color=(0,0,0))
+    ax.set_xlim(0,100)
+    ax.set_ylim(-128,127)
+    ax.set_zlim(-128,127)
+    # ax.scatter(pixels[:,0], pixels[:,1], pixels[:,2], c=pixels)
+    ax.scatter(pixelsLAB[:,0], pixelsLAB[:,1], pixelsLAB[:,2], c=pixels, zorder=0)
+    ax.scatter([c[0] for c in palette], [c[1] for c in palette], [c[2] for c in palette], color=(0,0,0), zorder=10)
+    ax.plot([c[0] for c in palette], [c[1] for c in palette], [c[2] for c in palette], color=(0,0,0), zorder=10)
+    plt.show()
+
+def colorPlotCS(img, rgb2cs):
+    img = scaleImg(img, 1000)
+    pixels = np.clip(np.reshape(img, (img.shape[0]*img.shape[1], 3)),0,1)
+    newcs = np.apply_along_axis(rgb2cs, 1, pixels)
+    fig = plt.figure()
+    ax = fig.add_subplot(111, projection='3d')
+    ax.scatter(newcs[:,0], newcs[:,1], newcs[:,2], c=pixels)
     plt.show()
 
 def pointLineSegDist(p1, l1, l2):
@@ -209,48 +228,77 @@ def avgPDistNP(cSet, points):
     u = np.clip(u, 0, 1)
     u = np.repeat(u[:,:,np.newaxis], 3, axis=2)
     distVec = pl1Diff-u*lDiff
-    # dist = np.min(np.sqrt(np.sum(distVec**2, axis=2)), axis=1)
-    dist = np.min(np.sum(distVec**2, axis=2), axis=1) # squared distance priotizes lone colors more
-    return np.average(dist)*transformFunc(np.sum(np.sqrt(du)))
+    dist = np.min(np.sqrt(np.sum(distVec**2, axis=2)), axis=1)
+    # dist = np.min(np.sum(distVec**2, axis=2), axis=1) # squared distance priotizes lone colors more
+    return np.average(dist)+np.sum(np.sqrt(du))/1000
 
 def colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=10, threshold=0.001, change_threshold=1e-10):
     img = scaleImg(img, 1000)
     colors = img.reshape(-1,3)
     colors = np.unique(colors, axis=0)
+    colors = np.apply_along_axis(color.rgb2lab, 1, colors)
+    sortIndex = np.argsort(colors[:,0])
+    colors = colors[sortIndex,:]
 
     objective = lambda x: avgPDistNP(colors, x.reshape(-1,3))
-    initGuess = np.full((maxFilaments,3), 0.5)
-    # initGuess = np.array([colorsys.hsv_to_rgb(i/maxFilaments,1,1) for i in range(maxFilaments)])
-    bounds = [(0,1) for _ in range(initGuess.size)]
-    result = None
+
+    initGuess = np.array([50,0,0]*maxFilaments)
+    bounds = np.array([[0,100],[-128,127],[-128,127]]*maxFilaments)
+
     counter = 0
-    l = len(str(maxIterations))
+    result = None
     prevErr = float('inf')
+    l = len(str(maxIterations))
     print(f"Optimizing [{" "*(l-1)}{counter+1}/{maxIterations}]", end='', flush=True)
     while counter < maxIterations and (result == None or result.success == False or result.fun > threshold):
         if result:
             if abs(prevErr - result.fun) < change_threshold:
                 break
         prevErr = result.fun if result != None else float('inf')
-        result = minimize(objective, initGuess.flatten(), method="Nelder-Mead", bounds=bounds)
-        initGuess = result.x
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            futureCOBYQA = executor.submit(minimize, objective, initGuess.flatten(), method="COBYQA", bounds=bounds)
+            futureSLSQP = executor.submit(minimize, objective, initGuess.flatten(), method="SLSQP", bounds=bounds)
+            resultCOBYQA = futureCOBYQA.result()
+            resultSLSQP = futureSLSQP.result()
+        # resultCOBYQA = minimize(objective, initGuess.flatten(), method="COBYQA", bounds=bounds)
+        # resultSLSQP = minimize(objective, initGuess.flatten(), method="SLSQP", bounds=bounds)
+        if resultCOBYQA.fun < resultSLSQP.fun:
+            initGuess = resultCOBYQA.x
+            result = resultCOBYQA
+        else:
+            initGuess = resultSLSQP.x
+            result = resultSLSQP
         print(f"\rOptimizing [{" "*(l-len(str(counter+1)))}{counter+1}/{maxIterations}]", end='', flush=True)
         counter += 1
     print("")
+    
     print(f"Done with sample err: {result.fun}")
     path = result.x.reshape(-1,3)
+    path = np.apply_along_axis(color.lab2rgb, 1, path)
+
     return path
 
 def normColor2Hex(color):
     return "#{:02x}{:02x}{:02x}".format(int(color[0]*255), int(color[1]*255), int(color[2]*255))
 
 if __name__ == "__main__":
-    path = sys.argv[1]
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('-i', '--image', help='path to image file', type=str, required=True)
+    argparser.add_argument('-f', '--filaments', help='number of filaments', required=False, default=4, type=int)
+    args = argparser.parse_args()
+
+    numFilaments = args.filaments
+    path = args.image
+
     filaments = getFilaments()
     img = cv2.imread(path)
+    img = cv2.flip(img, 0)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)/255
-    path = colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=20, threshold=0.001)
+
+    h, w, _ = img.shape
+    if w*h > 2000000: img = scaleImg(img, 2000000)
+
+    path = colorGradientMatch(img, filaments, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
     colorPlot(img, path)
-    for i in range(len(path)):
-        print(normColor2Hex(path[i]))
+    [print(normColor2Hex(c)) for c in path]
 

@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 import fast_simplification
 import itertools
 import pymeshlab
+import argparse
 import trimesh
 import random
 import pyfqmr
@@ -41,7 +42,8 @@ def genFaces(w, h):
             topfaces[nexti+1]=fs[1]
             nexti += 2
     
-    lasttop = faceVertices.shape[0]
+    # lasttop = faceVertices.shape[0]
+    lasttop = (w+1)*(h+1)
     corners = [lasttop, lasttop+1, lasttop+2, lasttop+3, lasttop+4, lasttop+5, lasttop+6, lasttop+7]
 
     faces = np.array([[corners[4],corners[5],corners[6]], # -z
@@ -153,34 +155,7 @@ def simplfyMesh(vertices, faces):
     return simVertices, simFaces
     # return vertices, faces
 
-if __name__ == '__main__':
-
-    TDPerColor = np.array([0.64,0.32,0.32,0.32,0.32,0.32,0.32,0.32,0.32,0.32])
-
-    # open image file
-    if len(sys.argv) != 2:
-        print("Usage: python stl_creator.py <image file>")
-        sys.exit(1)
-    path = sys.argv[1]
-    filename = os.path.basename(path).split('.')[0]
-    img = cv2.imread(path)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)/255
-    img = np.flipud(img)
-
-    h, w, _ = img.shape
-    if w*h > 2000000: img = scaleImg(img, 2000000)
-    h, w, _ = img.shape
-
-    print("Generating palette...")
-    filaments = getFilaments()
-    layerColors = colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=20, threshold=0.001)
-    palette = [(color.tolist(),TDPerColor[i]/LAYER_HEIGHT) for i,color in enumerate(layerColors)]
-
-    print("Processing image...")
-    vertexColors = calcVertexColors(img)
-    colors, depths, values = calcVertexInfo(vertexColors, layerColors, TDPerColor[:len(layerColors)]/LAYER_HEIGHT)
-
-    print("Computing vertices...")
+def genMesh(w, h):
     vh, vw = h+1, w+1
     vertexColors = np.zeros((vw*vh+8, 3))
     faceVertices = np.zeros((vw*vh, 3))
@@ -231,49 +206,97 @@ if __name__ == '__main__':
     vertices = np.concatenate((vertices, edgeVertices), axis=0)
     vertexColors = np.concatenate((vertexColors,np.zeros((counter, 3))), axis=0)
 
-    # scale vertices
-    width, height, depthMax = np.max(vertices, axis=0)
-    _, _, depthMin = np.min(vertices, axis=0)
-    scaleWidth = MAX_WIDTH/width
-    scaleHeight = MAX_HEIGHT/height
-    scale = min(scaleWidth, scaleHeight)
-    vertices[:,:2] = vertices[:,:2]*scale
-
-    print("Generating mesh...")
     faces = genFaces(w,h)
     # calc faces for edges
-    edgeLen = topEdgeVertexIndices.shape[0]
+    edgeLen = 2*w+2*h
     edgeFaces = np.zeros((edgeLen*2,3), dtype=np.uint32)
     for n in range(edgeLen):
         edgeFaces[2*n  ] = np.array([topEdgeVertexIndices[n],topEdgeVertexIndices[(n+1)%edgeLen],botEdgeVertexIndices[n]])
         edgeFaces[2*n+1] = np.array([botEdgeVertexIndices[n],botEdgeVertexIndices[(n+1)%edgeLen],topEdgeVertexIndices[(n+1)%edgeLen]])
     faces = np.concatenate((faces, edgeFaces), axis=0)
-    
-    # pymeshMesh = pymesh.form_mesh(vertices, faces)
-    # pymeshMesh = simplfyMesh(pymeshMesh)
-    simVerts, simFaces = simplfyMesh(vertices, faces)
-    print(f"Simplified {vertices.shape[0]} -> {simVerts.shape[0]} vertices")
-    print(f"Simplified {faces.shape[0]} -> {simFaces.shape[0]} faces")
+    return faces, vertices, vertexColors
 
-    #save to ply to see colors
+def scaleVertices(vertices, maxW, maxH):
+    width, height, depthMax = np.max(vertices, axis=0)
+    scaleWidth = maxW/width
+    scaleHeight = maxH/height
+    scale = min(scaleWidth, scaleHeight)
+    vertices[:,:2] = vertices[:,:2]*scale
+
+def savePLY(filename, face, vertices, colors):
     plymesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_colors=vertexColors)
     meshfileColor = f'res/{filename}_bump.ply'
     plymesh.export(meshfileColor)
     print(f"Saved ply to {meshfileColor}")
-    stlmesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
 
-    # save to stl file
+def saveSTL(filename, faces, vertices):
+    stlmesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
     meshfile = f'res/{filename}_bump.stl'
-    for i,f in enumerate(simFaces):
+    for i,f in enumerate(faces):
         for j in range(3):
-            stlmesh.vectors[i][j] = simVerts[f[j],:]
-    
+            stlmesh.vectors[i][j] = vertices[f[j],:]
     stlmesh.save(meshfile)
     print(f"Saved stl to {meshfile}")
+
+def getPaletteTD(colors):
+    print('Manual TD for each color:')
+    newTD = np.zeros(colors.shape[0])
+    for i in range(len(colors)):
+        td = float(input(f'\tTD for {normColor2Hex(colors[i])}: '))
+        newTD[i] = td
+    return newTD
+
+if __name__ == '__main__':
+
+    argparser = argparse.ArgumentParser()
+    argparser.add_argument('-i', '--image', help='path to image file', type=str, required=True)
+    argparser.add_argument('-m', '--manual-td', help='manual transmission distance for each layer', required=False, action=argparse.BooleanOptionalAction)
+    argparser.add_argument('-f', '--filaments', help='number of filaments', required=False, default=4, type=int)
+    args = argparser.parse_args()
+
+    numFilaments = args.filaments
+
+    path = args.image
+    filename = os.path.basename(path).split('.')[0]
+    img = cv2.imread(path)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)/255
+    img = np.flipud(img)
+
+    h, w, _ = img.shape
+    if w*h > 2000000: img = scaleImg(img, 2000000)
+    h, w, _ = img.shape
+
+    print("Generating palette...")
+    filaments = getFilaments()
+    layerColors = colorGradientMatch(img, filaments, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
+    TDPerColor = np.full(layerColors.shape[0],0.32)
+    if args.manual_td:
+        TDPerColor = getPaletteTD(layerColors)
+    palette = [(color.tolist(),round(TDPerColor[i]/LAYER_HEIGHT)) for i,color in enumerate(layerColors)]
+
+    print("Processing image...")
+    vertexColors = calcVertexColors(img)
+    colors, depths, values = calcVertexInfo(vertexColors, layerColors, TDPerColor[:len(layerColors)]/LAYER_HEIGHT)
+
+    print("Computing mesh...")
+    faces, vertices, vertexColors = genMesh(w, h)
+    scaleVertices(vertices, MAX_WIDTH, MAX_HEIGHT)
+
+    print("Simplifying mesh...")
+    simVerts, simFaces = simplfyMesh(vertices, faces)
+    print(f"Simplified {vertices.shape[0]} -> {simVerts.shape[0]} vertices")
+    print(f"Simplified {faces.shape[0]} -> {simFaces.shape[0]} faces")
+
+    print("Saving mesh...")
+    savePLY(filename, faces, vertices, vertexColors)
+    saveSTL(filename, simFaces, simVerts)
+
     print("")
+    width, height, depthMax = np.max(vertices, axis=0)
+    _, _, depthMin = np.min(vertices, axis=0)
     print(f"Layer height: {LAYER_HEIGHT}mm")
     print(f"Initial layer height: {INIT_LAYER_HEIGHT}mm")
-    print(f"Print size: {round(width*scale,2)} x {round(height*scale,2)} x {round(depthMax-depthMin,2)} mm")
+    print(f"Print size: {round(width,2)} x {round(height,2)} x {round(depthMax-depthMin,2)} mm")
     cumLayer = np.cumsum([e[1] for e in palette])
     print("")
     print(f"Start color: {normColor2Hex(palette[0][0])}")

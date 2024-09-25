@@ -104,10 +104,10 @@ def getFilaments():
         filaments[i]['color'] = normalizeColorFromHex(filaments[i]['color'])
     return filaments
 
-def scaleImg(img, pixels):
+def scaleImg(img, pixels, interpolation=cv2.INTER_NEAREST):
     currPixels = img.shape[0]*img.shape[1]
     scale = math.sqrt(pixels/currPixels)
-    return cv2.resize(img, (0,0), fx=scale, fy=scale, interpolation = cv2.INTER_AREA)
+    return cv2.resize(img, (0,0), fx=scale, fy=scale, interpolation = interpolation)
 
 def avgError(pixels, palette):
     error = 0
@@ -229,8 +229,10 @@ def avgPDistNP(cSet, points):
     u = np.repeat(u[:,:,np.newaxis], 3, axis=2)
     distVec = pl1Diff-u*lDiff
     dist = np.min(np.sqrt(np.sum(distVec**2, axis=2)), axis=1)
-    # dist = np.min(np.sum(distVec**2, axis=2), axis=1) # squared distance priotizes lone colors more
-    return np.average(dist)+np.sum(np.sqrt(du))/1000
+    avgDist = np.average(dist) # actual thing to solve for
+    pDistFactor = np.sum(np.sqrt(du))/100 # prioritise P which form a shorter line
+    lightnessIncreaseFactor = np.average(lDiff[:,0])/20 # prioritise layers from dark to light
+    return avgDist+pDistFactor+lightnessIncreaseFactor
 
 def colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=10, threshold=0.001, change_threshold=1e-10):
     img = scaleImg(img, 1000)
@@ -272,6 +274,8 @@ def colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=10, thresho
         counter += 1
     print("")
     
+    avgPDistNP(colors, result.x.reshape(-1,3))
+
     print(f"Done with sample err: {result.fun}")
     path = result.x.reshape(-1,3)
     path = np.apply_along_axis(color.lab2rgb, 1, path)
@@ -296,7 +300,7 @@ if __name__ == "__main__":
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)/255
 
     h, w, _ = img.shape
-    if w*h > 2000000: img = scaleImg(img, 2000000)
+    if w*h > 2000000: img = scaleImg(img, 2000000, interpolation=cv2.INTER_AREA)
 
     path = colorGradientMatch(img, filaments, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
     colorPlot(img, path)

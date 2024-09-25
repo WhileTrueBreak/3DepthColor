@@ -133,7 +133,9 @@ def calcVertexInfo(vertexColors, palette, layers):
     lowerIndex, minRatio, minErr = colorRatioSolverNP(vertexColors, l1, l2)
     upperIndex = lowerIndex+1
     values = np.stack((upperIndex, minRatio, minErr), axis=2)
-    blendLayers = layers[upperIndex]*minRatio
+    # ratioScale = 1-np.sqrt(-minRatio**2+1) # quarter circle 
+    ratioScale = minRatio**2 # quadratic
+    blendLayers = np.rint(layers[upperIndex]*ratioScale)
     depths = (cumLayers[lowerIndex]+blendLayers)*LAYER_HEIGHT
     ratioFull = np.repeat(minRatio[:,:,np.newaxis], 3, axis=2)
     colors = palette[upperIndex]*ratioFull+palette[lowerIndex]*(1-ratioFull)
@@ -252,7 +254,15 @@ if __name__ == '__main__':
     argparser.add_argument('-i', '--image', help='path to image file', type=str, required=True)
     argparser.add_argument('-m', '--manual-td', help='manual transmission distance for each layer', required=False, action=argparse.BooleanOptionalAction)
     argparser.add_argument('-f', '--filaments', help='number of filaments', required=False, default=4, type=int)
+    argparser.add_argument('-l', '--layer-height', help='height of layer', required=False, default=0.08, type=float)
+    argparser.add_argument('-mw', '--max-width', help='max width of model in mm', required=False, default=63, type=float)
+    argparser.add_argument('-mh', '--max-height', help='max height of model in mm', required=False, default=88, type=float)
+
     args = argparser.parse_args()
+
+    LAYER_HEIGHT = args.layer_height
+    MAX_HEIGHT = args.max_height
+    MAX_WIDTH = args.max_width
 
     numFilaments = args.filaments
     path = args.image
@@ -260,10 +270,11 @@ if __name__ == '__main__':
     filename = os.path.basename(path).split('.')[0]
     img = cv2.imread(path)
     img = cv2.flip(img, 0)
+    img = cv2.filter2D(img, -1, np.ones((3,3),dtype=np.float32)/9)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)/255
 
     h, w, _ = img.shape
-    if w*h > 2000000: img = scaleImg(img, 2000000)
+    if w*h > 2000000: img = scaleImg(img, 2000000, interpolation=cv2.INTER_AREA)
     h, w, _ = img.shape
 
     print("Generating palette...")

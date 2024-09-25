@@ -1,24 +1,5 @@
-eSun PLA+
-White: 3.0
-Cold White: 1.4
-Black: 0.2
-Red: 1.8
-Blue: 1.6
-Gray: 0.8
-Silver: 1.0
-
-SainSmart PLA+ GT3
-Cyan: 1.4
-Magenta: 1.4
-Yellow: 2.6
-
-Duramic PLA
-Light Brown: 1.6
-
-Inland Tough PLA
-Lime Green: 2.2
-
-Inland PLA
-Brown: 0.7
-Light Blue: 1.8
-
+~>0.80 esun white
+<0.16 creality black
+>0.40 fashion3d red
+~0.32 fashion3d blue
+~0.32 fashion3d blue grey

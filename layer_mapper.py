@@ -1,19 +1,19 @@
 import numpy as np
-from stl import mesh
 from scipy.ndimage import shift
 from joblib import Parallel, delayed
 from concurrent.futures import ThreadPoolExecutor
+import xml.etree.ElementTree as ET
 import fast_simplification
 import itertools
 import pymeshlab
 import argparse
 import trimesh
+import zipfile
 import random
 import pyfqmr
 import sys
-import os
-
 import cv2
+import os
 
 from color_solver import *
 
@@ -136,8 +136,9 @@ def calcVertexInfo(vertexColors, palette, layers):
     # ratioScale = 1-np.sqrt(-minRatio**2+1) # quarter circle 
     ratioScale = minRatio**2 # quadratic
     blendLayers = np.rint(layers[upperIndex]*ratioScale)
+    roundedMinRatio = np.sqrt(blendLayers/layers[upperIndex])
     depths = (cumLayers[lowerIndex]+blendLayers)*LAYER_HEIGHT
-    ratioFull = np.repeat(minRatio[:,:,np.newaxis], 3, axis=2)
+    ratioFull = np.repeat(roundedMinRatio[:,:,np.newaxis], 3, axis=2)
     colors = palette[upperIndex]*ratioFull+palette[lowerIndex]*(1-ratioFull)
     return colors, depths, values
 
@@ -226,19 +227,41 @@ def scaleVertices(vertices, maxW, maxH):
     vertices[:,:2] = vertices[:,:2]*scale
 
 def savePLY(filename, face, vertices, colors):
-    plymesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_colors=vertexColors)
+    plymesh = trimesh.Trimesh(vertices=vertices, faces=faces, vertex_colors=colors)
     meshfileColor = f'res/{filename}_bump.ply'
     plymesh.export(meshfileColor)
     print(f"Saved ply to {meshfileColor}")
 
 def saveSTL(filename, faces, vertices):
-    stlmesh = mesh.Mesh(np.zeros(faces.shape[0], dtype=mesh.Mesh.dtype))
-    meshfile = f'res/{filename}_bump.stl'
-    for i,f in enumerate(faces):
-        for j in range(3):
-            stlmesh.vectors[i][j] = vertices[f[j],:]
-    stlmesh.save(meshfile)
-    print(f"Saved stl to {meshfile}")
+    plymesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+    meshfileColor = f'res/{filename}_bump.stl'
+    plymesh.export(meshfileColor)
+    print(f"Saved ply to {meshfileColor}")
+
+def save3MF(filename, face, vertices, palette):
+    colors = [normColor2Hex(layer[0]) for layer in palette]
+    cumLayer = shift(np.cumsum([e[1] for e in palette])+1, 1, cval=0)
+    swapHeights = np.array(cumLayer)*LAYER_HEIGHT+INIT_LAYER_HEIGHT
+    plymesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+    tempMeshfile = f'tmp/{filename}_bump.3mf'
+    meshfile = f'res/{filename}_bump.3mf'
+    plymesh.export(tempMeshfile)
+    with zipfile.ZipFile(meshfile, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for root, dir, files in os.walk('bbl_struct'):
+            for file in files:
+                full_path = os.path.join(root, file)
+                rel_path = os.path.relpath(full_path, 'bbl_struct')
+                zf.write(full_path, arcname=rel_path)
+        # with zf.open('Metadata/custom_gcode_per_layer.xml', 'w') as f:
+        #     root = ET.Element('custom_gcode_per_layer')
+        #     plate = ET.SubElement(root, 'plate')
+        #     plate_info = ET.SubElement(plate, 'plate_info', id='1')
+        #     for i,c in enumerate(colors):
+        #         layer = ET.SubElement(plate, 'layer', top_z=str(swapHeights[i]), type='2', extruder=str(i), color=c, extra='', gcode='tool_change')
+        #     mode = ET.SubElement(plate, 'mode', value='MultiAsSingle')
+        #     tree = ET.ElementTree(root)
+        #     tree.write(f, encoding="utf-8", xml_declaration=True)
+    print(f"Saved ply to {meshfile}")
 
 def getPaletteTD(colors):
     print('Manual TD for each color:')
@@ -254,15 +277,16 @@ if __name__ == '__main__':
     argparser.add_argument('-i', '--image', help='path to image file', type=str, required=True)
     argparser.add_argument('-m', '--manual-td', help='manual transmission distance for each layer', required=False, action=argparse.BooleanOptionalAction)
     argparser.add_argument('-f', '--filaments', help='number of filaments', required=False, default=4, type=int)
-    argparser.add_argument('-l', '--layer-height', help='height of layer', required=False, default=0.08, type=float)
-    argparser.add_argument('-mw', '--max-width', help='max width of model in mm', required=False, default=63, type=float)
-    argparser.add_argument('-mh', '--max-height', help='max height of model in mm', required=False, default=88, type=float)
+    argparser.add_argument('-md', '--max-dim', help='max dimensions of model in mm', required=False, nargs=2, default=(MAX_WIDTH,MAX_HEIGHT), type=float)
+    argparser.add_argument('-l', '--layer-height', help='height of layer', required=False, default=LAYER_HEIGHT, type=float)
+    argparser.add_argument('-il', '--init-layer-height', help='height of the first layer', required=False, default=INIT_LAYER_HEIGHT, type=float)
+
 
     args = argparser.parse_args()
 
     LAYER_HEIGHT = args.layer_height
-    MAX_HEIGHT = args.max_height
-    MAX_WIDTH = args.max_width
+    INIT_LAYER_HEIGHT = args.init_layer_height
+    MAX_WIDTH, MAX_HEIGHT = args.max_dim
 
     numFilaments = args.filaments
     path = args.image
@@ -302,6 +326,7 @@ if __name__ == '__main__':
     print("Saving mesh...")
     savePLY(filename, faces, vertices, vertexColors)
     saveSTL(filename, simFaces, simVerts)
+    # save3MF(filename, simFaces, simVerts, palette)
 
     print("")
     width, height, depthMax = np.max(vertices, axis=0)

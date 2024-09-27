@@ -3,3 +3,4 @@
 >0.40 fashion3d red
 ~0.32 fashion3d blue
 ~0.32 fashion3d blue grey
+~>0.32 grey

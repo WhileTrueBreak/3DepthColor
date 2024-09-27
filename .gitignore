@@ -1,7 +1,6 @@
 res/*
 tmp/*
 bin/*
-bbl_struct/*
 lib64
 pyvenv.cfg
 man/

@@ -3,6 +3,7 @@ from scipy.ndimage import shift
 from joblib import Parallel, delayed
 from concurrent.futures import ThreadPoolExecutor
 import xml.etree.ElementTree as ET
+from skimage import io, color
 import fast_simplification
 import itertools
 import pymeshlab
@@ -127,14 +128,20 @@ def calcVertexColors(img):
     vertexColors /= np.repeat(counts[:,:,np.newaxis], 3, axis=2)
     return vertexColors
 
-def calcVertexInfo(vertexColors, palette, layers):
+def calcVertexInfo(vertexColors, palette, layers, layerHeight):
     cumLayers = shift(np.cumsum(layers[1:]),1,cval=0)
-    l1, l2 = palette[:-1], palette[1:]
-    lowerIndex, minRatio, minErr = colorRatioSolverNP(vertexColors, l1, l2)
+    paletteLAB = np.apply_along_axis(color.rgb2lab, 1, palette)
+    l1, l2 = paletteLAB[:-1], paletteLAB[1:]
+    vertexColorsLAB = cv2.cvtColor((vertexColors*255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(float)
+    vertexColorsLAB[:,:,0] = vertexColorsLAB[:,:,0]/255*100
+    vertexColorsLAB[:,:,1] = vertexColorsLAB[:,:,1]-128
+    vertexColorsLAB[:,:,2] = vertexColorsLAB[:,:,2]-128
+    lowerIndex, minRatio, minErr = colorRatioSolverNP(vertexColorsLAB, l1, l2, 125*layerHeight)
     upperIndex = lowerIndex+1
     values = np.stack((upperIndex, minRatio, minErr), axis=2)
     # ratioScale = 1-np.sqrt(-minRatio**2+1) # quarter circle 
     ratioScale = minRatio**2 # quadratic
+    # ratioScale = minRatio # linear
     blendLayers = np.rint(layers[upperIndex]*ratioScale)
     roundedMinRatio = np.sqrt(blendLayers/layers[upperIndex])
     depths = (cumLayers[lowerIndex]+blendLayers)*LAYER_HEIGHT
@@ -281,8 +288,6 @@ if __name__ == '__main__':
     argparser.add_argument('-md', '--max-dim', help='max dimensions of model in mm', required=False, nargs=2, default=(MAX_WIDTH,MAX_HEIGHT), type=float)
     argparser.add_argument('-l', '--layer-height', help='height of layer', required=False, default=LAYER_HEIGHT, type=float)
     argparser.add_argument('-il', '--init-layer-height', help='height of the first layer', required=False, default=INIT_LAYER_HEIGHT, type=float)
-
-
     args = argparser.parse_args()
 
     LAYER_HEIGHT = args.layer_height
@@ -304,9 +309,11 @@ if __name__ == '__main__':
 
     print("Generating palette...")
     filaments = getFilaments()
-    layerColors = colorGradientMatch(img, filaments, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
+    layerColors = colorGradientMatch(img, filaments, layerHeight=LAYER_HEIGHT, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
     if args.reverse: layerColors = layerColors[::-1]
     TDPerColor = np.full(layerColors.shape[0],0.32)
+    for i in range(len(TDPerColor)):
+        TDPerColor[i] = color.rgb2lab(layerColors[i])[0]/125
     if args.manual_td:
         TDPerColor = getPaletteTD(layerColors)
     TDPerColor[0] = max(0, TDPerColor[0]-args.init_layer_height)
@@ -314,7 +321,8 @@ if __name__ == '__main__':
 
     print("Processing image...")
     vertexColors = calcVertexColors(img)
-    colors, depths, values = calcVertexInfo(vertexColors, layerColors, TDPerColor[:len(layerColors)]/LAYER_HEIGHT)
+    colors, depths, values = calcVertexInfo(vertexColors, layerColors, TDPerColor[:len(layerColors)]/LAYER_HEIGHT, LAYER_HEIGHT)
+    # exit()
 
     print("Computing mesh...")
     faces, vertices, vertexColors = genMesh(w, h)

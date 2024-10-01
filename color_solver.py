@@ -37,34 +37,61 @@ def colorRatioSolver(color, p1, p2):
 
     return ratio, error
 
-def colorRatioSolverNP(colors, p1, p2):
-    p21Diff = p2-p1
-    p21SquareDist = np.sum(p21Diff**2, axis=1)
-    cP = np.repeat(colors[:,:,np.newaxis,:],p21Diff.shape[0],axis=2)*p21Diff
-    p1P = p1*p21Diff
-    p1P = p1P.reshape(1,1,p1P.shape[0],p1P.shape[1])
-    p1P = np.tile(p1P, (cP.shape[0],cP.shape[1],1,1))
-    cp1PDiffSum = np.sum(cP-p1P, axis=3)
+def colorRatioSolverNP(cSet, p1, p2, llr):
+    lDiff = p2-p1
+    cPoints = np.copy(p1[0])
+    cSamples = p2[:,0]/llr+1 # num samples along line
 
-    p21SquareDist = p21SquareDist.reshape(1,1,p21SquareDist.shape[0])
-    p21SquareDist = np.tile(p21SquareDist, (cp1PDiffSum.shape[0],cp1PDiffSum.shape[1],1))
-    
-    ratio = np.zeros(cp1PDiffSum.shape)
-    ratio = np.divide(cp1PDiffSum, p21SquareDist, out=ratio, where=p21SquareDist!=0)
-    ratio = np.clip(ratio, 0, 1)
+    cSet = np.repeat(cSet[:,:,np.newaxis,:],p1.shape[0],axis=2)
+    pl1Diff = cSet - p1[None,None,:,:]
+    du = np.sum(lDiff**2, axis=1) # square dist
+    avgHD = np.sqrt(du)/(4*cSamples) # average dist along line given samples
 
-    err = np.repeat(colors[:,:,np.newaxis,:],ratio.shape[2],axis=2)
-    p21Ratio = np.repeat(ratio[:,:,:,np.newaxis],p21Diff.shape[1],axis=3)*p21Diff
-    p1Full = p1.reshape(1,1,p1.shape[0],p1.shape[1])
-    p1Full = np.tile(p1Full, (err.shape[0],err.shape[1],1,1))
-    err = err-p21Ratio-p1Full
-    err = np.sum(err**2, axis=3)
+    nu = np.sum(pl1Diff*lDiff[None,None,:,:], axis=3)
+    u = np.zeros(nu.shape)
+    u = np.divide(nu, du, out=u, where=du!=0)
+    ratio = np.clip(u, 0, 1) # ratio along line 
+    distVec = pl1Diff-(ratio[:,:,:,None]*lDiff[None,None,:,:])
+    sqDist = np.sum(distVec**2, axis=3)
+    dist = np.sqrt(sqDist)
+    adjDist = np.sqrt(avgHD[None,None,:]**2+sqDist) # adjusted distance via avg hoz dist
 
-    minIndex = np.argmin(err, axis=2)
+    mask = (u > 0) & (u < 1)
+    adjDist = np.where(mask, adjDist, dist)
+
+    minIndex = np.argmin(adjDist, axis=2)
     row = np.arange(minIndex.shape[0])[:,None]
     col = np.arange(minIndex.shape[1])
     minRatio = ratio[row,col,minIndex]
-    minErr = err[row,col,minIndex]
+    minErr = adjDist[row,col,minIndex]
+
+    # p21Diff = p2-p1
+    # p21SquareDist = np.sum(p21Diff**2, axis=1)
+    # cP = np.repeat(colors[:,:,np.newaxis,:],p21Diff.shape[0],axis=2)*p21Diff
+    # p1P = p1*p21Diff
+    # p1P = p1P.reshape(1,1,p1P.shape[0],p1P.shape[1])
+    # p1P = np.tile(p1P, (cP.shape[0],cP.shape[1],1,1))
+    # cp1PDiffSum = np.sum(cP-p1P, axis=3)
+
+    # p21SquareDist = p21SquareDist.reshape(1,1,p21SquareDist.shape[0])
+    # p21SquareDist = np.tile(p21SquareDist, (cp1PDiffSum.shape[0],cp1PDiffSum.shape[1],1))
+    
+    # ratio = np.zeros(cp1PDiffSum.shape)
+    # ratio = np.divide(cp1PDiffSum, p21SquareDist, out=ratio, where=p21SquareDist!=0)
+    # ratio = np.clip(ratio, 0, 1)
+
+    # err = np.repeat(colors[:,:,np.newaxis,:],ratio.shape[2],axis=2)
+    # p21Ratio = np.repeat(ratio[:,:,:,np.newaxis],p21Diff.shape[1],axis=3)*p21Diff
+    # p1Full = p1.reshape(1,1,p1.shape[0],p1.shape[1])
+    # p1Full = np.tile(p1Full, (err.shape[0],err.shape[1],1,1))
+    # err = err-p21Ratio-p1Full
+    # err = np.sum(err**2, axis=3)
+
+    # minIndex = np.argmin(err, axis=2)
+    # row = np.arange(minIndex.shape[0])[:,None]
+    # col = np.arange(minIndex.shape[1])
+    # minRatio = ratio[row,col,minIndex]
+    # minErr = err[row,col,minIndex]
     return minIndex, minRatio, minErr
 
 def getColorRatio(color, palette):
@@ -172,13 +199,18 @@ def colorPlot(img, palette):
     ax.plot([c[0] for c in palette], [c[1] for c in palette], [c[2] for c in palette], color=(0,0,0), zorder=10)
     plt.show()
 
-def colorPlotCS(img, rgb2cs):
-    img = scaleImg(img, 1000)
-    pixels = np.clip(np.reshape(img, (img.shape[0]*img.shape[1], 3)),0,1)
-    newcs = np.apply_along_axis(rgb2cs, 1, pixels)
+def colorPlotPoints(img, points):
+    pixels = getImgColors(img)
+    pixelsLAB = np.apply_along_axis(color.rgb2lab, 1, pixels)
+    points = np.apply_along_axis(color.rgb2lab, 1, points)
+
     fig = plt.figure()
     ax = fig.add_subplot(111, projection='3d')
-    ax.scatter(newcs[:,0], newcs[:,1], newcs[:,2], c=pixels)
+    ax.set_xlim(0,100)
+    ax.set_ylim(-128,127)
+    ax.set_zlim(-128,127)
+    # ax.scatter(pixelsLAB[:,0], pixelsLAB[:,1], pixelsLAB[:,2], c=pixels, zorder=0)
+    ax.scatter(points[:,0], points[:,1], points[:,2], color=(0,0,0), zorder=100000)
     plt.show()
 
 def pointLineSegDist(p1, l1, l2):
@@ -212,7 +244,6 @@ def avgPDist(cSet, points):
     avgDist = totalDist / len(cSet)
     return avgDist
 
-# TODO implement dark color/black resets since black is fully opaque
 def avgPDistNP(cSet, points):
     l2 = points[1:]
     l1 = points[:-1]
@@ -232,6 +263,30 @@ def avgPDistNP(cSet, points):
     # pDist = np.sqrt(np.sum(lDiff**2, axis=1))
     return avgDist+pDistFactor+lightnessIncreaseFactor
 
+def layerObjective(cSet, points, llr):
+    l2 = points[1:]
+    l1 = points[:-1]
+    lDiff = l2-l1
+    cPoints = np.copy(l1[0])
+    cSamples = l2[:,0]/llr+1 # num samples along line
+
+    pl1Diff = cSet[:,None] - l1[None,:]
+    du = np.sum(lDiff**2, axis=1) # square dist
+    avgHD = np.sqrt(du)/(4*cSamples) # average dist along line given samples
+
+    nu = np.sum(pl1Diff*lDiff, axis=2)
+    u = np.zeros(nu.shape)
+    u = np.divide(nu, du, out=u, where=du!=0)
+    uClip = np.clip(u, 0, 1) # ratio along line 
+    distVec = pl1Diff-uClip[:,:,None]*lDiff
+    sqDist = np.sum(distVec**2, axis=2)
+    # dist = np.sqrt(sqDist)
+    adjDist = np.sqrt(avgHD[None,:]**2+sqDist) # adjusted distance via avg hoz dist
+
+    minDistArg = np.argmin(adjDist, axis=1)
+    minDist = adjDist[np.arange(len(minDistArg)),minDistArg]
+    return np.average(minDist)
+
 def getImgColors(img, numColors=1000):
     kImg = scaleImg(img, numColors*100)
     imgColors = kImg.reshape(-1,3)
@@ -243,11 +298,12 @@ def getImgColors(img, numColors=1000):
     colors = np.clip(colors, 0, 1)
     return colors
 
-def colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=10, threshold=0.001, change_threshold=1e-10):
+def colorGradientMatch(img, filaments, layerHeight=0.08, maxFilaments=4, maxIterations=10, threshold=0.001, change_threshold=1e-10):
     colors = getImgColors(img)
     colors = np.apply_along_axis(color.rgb2lab, 1, colors)
 
-    objective = lambda x: avgPDistNP(colors, x.reshape(-1,3))
+    # objective = lambda x: avgPDistNP(colors, x.reshape(-1,3))
+    objective = lambda x: layerObjective(colors, x.reshape(-1,3), 125*layerHeight)
 
     initGuess = np.array([50,0,0]*maxFilaments)
     bounds = np.array([[0,100],[-128,127],[-128,127]]*maxFilaments)
@@ -259,22 +315,22 @@ def colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=10, thresho
     print(f"Optimizing [{" "*(l-1)}{counter+1}/{maxIterations}]", end='', flush=True)
     while counter < maxIterations and (result == None or result.success == False or result.fun > threshold):
         if result:
-            if abs(prevErr - result.fun) < change_threshold:
+            if prevErr - result.fun < change_threshold:
                 break
         prevErr = result.fun if result != None else float('inf')
         with ThreadPoolExecutor(max_workers=2) as executor:
-            futureCOBYQA = executor.submit(minimize, objective, initGuess.flatten(), method="COBYQA", bounds=bounds)
-            futureSLSQP = executor.submit(minimize, objective, initGuess.flatten(), method="SLSQP", bounds=bounds)
-            resultCOBYQA = futureCOBYQA.result()
+            # futureCOBYQA = executor.submit(minimize, objective, np.copy(initGuess.flatten()), method="COBYQA", bounds=bounds, tol=0)
+            futureSLSQP = executor.submit(minimize, objective, np.copy(initGuess.flatten()), method="SLSQP", bounds=bounds, tol=0)
+            # resultCOBYQA = futureCOBYQA.result()
             resultSLSQP = futureSLSQP.result()
-        # resultCOBYQA = minimize(objective, initGuess.flatten(), method="COBYQA", bounds=bounds)
-        # resultSLSQP = minimize(objective, initGuess.flatten(), method="SLSQP", bounds=bounds)
-        if resultCOBYQA.fun < resultSLSQP.fun:
-            initGuess = resultCOBYQA.x
-            result = resultCOBYQA
-        else:
-            initGuess = resultSLSQP.x
-            result = resultSLSQP
+        # if resultCOBYQA.fun < resultSLSQP.fun:
+        #     initGuess = resultCOBYQA.x
+        #     result = resultCOBYQA
+        # else:
+        #     initGuess = resultSLSQP.x
+        #     result = resultSLSQP
+        initGuess = resultSLSQP.x
+        result = resultSLSQP
         print(f"\rOptimizing [{" "*(l-len(str(counter+1)))}{counter+1}/{maxIterations}]", end='', flush=True)
         counter += 1
     print("")
@@ -307,8 +363,13 @@ if __name__ == "__main__":
     h, w, _ = img.shape
     if w*h > 2000000: img = scaleImg(img, 2000000, interpolation=cv2.INTER_AREA)
 
-    path = colorGradientMatch(img, filaments, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
+    path = colorGradientMatch(img, filaments, maxFilaments=numFilaments, maxIterations=40, threshold=0.001)
     colorPlot(img, path)
 
-    [print(normColor2Hex(c)) for c in path]
+    # colors = getImgColors(img)
+    # colors = np.apply_along_axis(color.rgb2lab, 1, colors)
+    # path = np.apply_along_axis(color.rgb2lab, 1, path)
+    # layerObjective(colors, path, 10)
+
+    # [print(normColor2Hex(c)) for c in path]
 

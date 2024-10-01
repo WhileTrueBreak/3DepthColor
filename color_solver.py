@@ -156,8 +156,7 @@ def colorDiff(c1, c2):
     return np.linalg.norm(c1-c2)
 
 def colorPlot(img, palette):
-    img = scaleImg(img, 1000)
-    pixels = np.clip(np.reshape(img, (img.shape[0]*img.shape[1], 3)),0,1)
+    pixels = getImgColors(img)
 
     pixelsLAB = np.apply_along_axis(color.rgb2lab, 1, pixels)
     palette = np.apply_along_axis(color.rgb2lab, 1, palette)
@@ -213,12 +212,10 @@ def avgPDist(cSet, points):
     avgDist = totalDist / len(cSet)
     return avgDist
 
-def transformFunc(num):
-    return 4/(1+np.exp(-num+4))+1
-
+# TODO implement dark color/black resets since black is fully opaque
 def avgPDistNP(cSet, points):
-    l1 = points[1:]
-    l2 = points[:-1]
+    l2 = points[1:]
+    l1 = points[:-1]
     lDiff = l2-l1
     pl1Diff = cSet[:,None] - l1[None,:]
     du = np.sum(lDiff**2, axis=1)
@@ -231,16 +228,24 @@ def avgPDistNP(cSet, points):
     dist = np.min(np.sqrt(np.sum(distVec**2, axis=2)), axis=1)
     avgDist = np.average(dist) # actual thing to solve for
     pDistFactor = np.sum(np.sqrt(du))/100 # prioritise P which form a shorter line
-    lightnessIncreaseFactor = np.average(lDiff[:,0])/20 # prioritise layers from dark to light
+    lightnessIncreaseFactor = np.average(-lDiff[:,0])/20 # prioritise layers from dark to light
+    # pDist = np.sqrt(np.sum(lDiff**2, axis=1))
     return avgDist+pDistFactor+lightnessIncreaseFactor
 
-def colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=10, threshold=0.001, change_threshold=1e-10):
-    img = scaleImg(img, 1000)
-    colors = img.reshape(-1,3)
-    colors = np.unique(colors, axis=0)
-    colors = np.apply_along_axis(color.rgb2lab, 1, colors)
+def getImgColors(img, numColors=1000):
+    kImg = scaleImg(img, numColors*100)
+    imgColors = kImg.reshape(-1,3)
+    kmeans = KMeans(n_clusters=numColors, random_state=0)
+    kmeans.fit(imgColors)
+    colors = kmeans.cluster_centers_
     sortIndex = np.argsort(colors[:,0])
     colors = colors[sortIndex,:]
+    colors = np.clip(colors, 0, 1)
+    return colors
+
+def colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=10, threshold=0.001, change_threshold=1e-10):
+    colors = getImgColors(img)
+    colors = np.apply_along_axis(color.rgb2lab, 1, colors)
 
     objective = lambda x: avgPDistNP(colors, x.reshape(-1,3))
 
@@ -279,7 +284,6 @@ def colorGradientMatch(img, filaments, maxFilaments=4, maxIterations=10, thresho
     print(f"Done with sample err: {result.fun}")
     path = result.x.reshape(-1,3)
     path = np.apply_along_axis(color.lab2rgb, 1, path)
-
     return path
 
 def normColor2Hex(color):
@@ -297,6 +301,7 @@ if __name__ == "__main__":
     filaments = getFilaments()
     img = cv2.imread(path)
     img = cv2.flip(img, 0)
+    img = cv2.filter2D(img, -1, np.ones((3,3),dtype=np.float32)/9)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)/255
 
     h, w, _ = img.shape
@@ -304,5 +309,6 @@ if __name__ == "__main__":
 
     path = colorGradientMatch(img, filaments, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
     colorPlot(img, path)
+
     [print(normColor2Hex(c)) for c in path]
 

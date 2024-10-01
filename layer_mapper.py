@@ -276,6 +276,7 @@ if __name__ == '__main__':
     argparser = argparse.ArgumentParser()
     argparser.add_argument('-i', '--image', help='path to image file', type=str, required=True)
     argparser.add_argument('-m', '--manual-td', help='manual transmission distance for each layer', required=False, action=argparse.BooleanOptionalAction)
+    argparser.add_argument('-r', '--reverse', help='reverse the generated palette', required=False, action=argparse.BooleanOptionalAction)
     argparser.add_argument('-f', '--filaments', help='number of filaments', required=False, default=4, type=int)
     argparser.add_argument('-md', '--max-dim', help='max dimensions of model in mm', required=False, nargs=2, default=(MAX_WIDTH,MAX_HEIGHT), type=float)
     argparser.add_argument('-l', '--layer-height', help='height of layer', required=False, default=LAYER_HEIGHT, type=float)
@@ -304,9 +305,11 @@ if __name__ == '__main__':
     print("Generating palette...")
     filaments = getFilaments()
     layerColors = colorGradientMatch(img, filaments, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
+    if args.reverse: layerColors = layerColors[::-1]
     TDPerColor = np.full(layerColors.shape[0],0.32)
     if args.manual_td:
         TDPerColor = getPaletteTD(layerColors)
+    TDPerColor[0] = max(0, TDPerColor[0]-args.init_layer_height)
     palette = [(color.tolist(),round(TDPerColor[i]/LAYER_HEIGHT)) for i,color in enumerate(layerColors)]
 
     print("Processing image...")
@@ -339,3 +342,5 @@ if __name__ == '__main__':
     print(f"Start color: {normColor2Hex(palette[0][0])}")
     for i in range(1, len(palette)):
         print(f"Filament change at layer {cumLayer[i-1]+2} to {normColor2Hex(palette[i][0])}")
+
+    colorPlot(img, layerColors)

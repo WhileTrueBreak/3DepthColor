@@ -316,7 +316,7 @@ if __name__ == '__main__':
         TDPerColor[i] = color.rgb2lab(layerColors[i])[0]/125
     if args.manual_td:
         TDPerColor = getPaletteTD(layerColors)
-    TDPerColor[0] = max(0, TDPerColor[0]-args.init_layer_height)
+    TDPerColor[0] = max(args.init_layer_height, TDPerColor[0]-args.init_layer_height)
     palette = [(color.tolist(),round(TDPerColor[i]/LAYER_HEIGHT)) for i,color in enumerate(layerColors)]
 
     print("Processing image...")

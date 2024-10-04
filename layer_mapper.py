@@ -24,6 +24,9 @@ LAYER_HEIGHT = 0.08
 MAX_WIDTH = 63
 MAX_HEIGHT = 88
 
+LUM_LAYER_FACTOR = 125 # default 125
+MAX_IMAGE_PIXELS = 4000000
+
 def getFaceSquare(ix, iy, vw, vh):
     topleft = ix%vw+iy*vw
     topright = (ix+1)%vw+iy*vw
@@ -136,11 +139,12 @@ def calcVertexInfo(vertexColors, palette, layers, layerHeight):
     vertexColorsLAB[:,:,0] = vertexColorsLAB[:,:,0]/255*100
     vertexColorsLAB[:,:,1] = vertexColorsLAB[:,:,1]-128
     vertexColorsLAB[:,:,2] = vertexColorsLAB[:,:,2]-128
-    lowerIndex, minRatio, minErr = colorRatioSolverNP(vertexColorsLAB, l1, l2, 125*layerHeight)
+    lowerIndex, minRatio, minErr = colorRatioSolverNP(vertexColorsLAB, l1, l2, LUM_LAYER_FACTOR*layerHeight)
     upperIndex = lowerIndex+1
     values = np.stack((upperIndex, minRatio, minErr), axis=2)
     # ratioScale = 1-np.sqrt(-minRatio**2+1) # quarter circle 
     ratioScale = minRatio**2 # quadratic
+    # ratioScale = minRatio**3 # cubic
     # ratioScale = minRatio # linear
     blendLayers = np.rint(layers[upperIndex]*ratioScale)
     roundedMinRatio = np.sqrt(blendLayers/layers[upperIndex])
@@ -288,32 +292,37 @@ if __name__ == '__main__':
     argparser.add_argument('-md', '--max-dim', help='max dimensions of model in mm', required=False, nargs=2, default=(MAX_WIDTH,MAX_HEIGHT), type=float)
     argparser.add_argument('-l', '--layer-height', help='height of layer', required=False, default=LAYER_HEIGHT, type=float)
     argparser.add_argument('-il', '--init-layer-height', help='height of the first layer', required=False, default=INIT_LAYER_HEIGHT, type=float)
+    argparser.add_argument('-llr', '--llr', help='factor influencing layer count', required=False, default=LUM_LAYER_FACTOR, type=float)
     args = argparser.parse_args()
 
     LAYER_HEIGHT = args.layer_height
     INIT_LAYER_HEIGHT = args.init_layer_height
     MAX_WIDTH, MAX_HEIGHT = args.max_dim
+    LUM_LAYER_FACTOR = args.llr
 
     numFilaments = args.filaments
     path = args.image
+    if not os.path.exists(path):
+        print(f"Image file {path} does not exist.")
+        sys.exit(1)
 
     filename = os.path.basename(path).split('.')[0]
-    img = cv2.imread(path)
+    img = cv2.imread(path, cv2.IMREAD_UNCHANGED)
     img = cv2.flip(img, 0)
     img = cv2.filter2D(img, -1, np.ones((3,3),dtype=np.float32)/9)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)/255
 
     h, w, _ = img.shape
-    if w*h > 2000000: img = scaleImg(img, 2000000, interpolation=cv2.INTER_AREA)
+    if w*h > MAX_IMAGE_PIXELS: img = scaleImg(img, MAX_IMAGE_PIXELS, interpolation=cv2.INTER_AREA)
     h, w, _ = img.shape
 
     print("Generating palette...")
     filaments = getFilaments()
-    layerColors = colorGradientMatch(img, filaments, layerHeight=LAYER_HEIGHT, maxFilaments=numFilaments, maxIterations=20, threshold=0.001)
+    layerColors = colorGradientMatch(img, filaments, llr=LUM_LAYER_FACTOR*LAYER_HEIGHT, maxFilaments=numFilaments, maxIterations=40, threshold=0.001)
     if args.reverse: layerColors = layerColors[::-1]
     TDPerColor = np.full(layerColors.shape[0],0.32)
     for i in range(len(TDPerColor)):
-        TDPerColor[i] = color.rgb2lab(layerColors[i])[0]/125
+        TDPerColor[i] = color.rgb2lab(layerColors[i])[0]/LUM_LAYER_FACTOR
     if args.manual_td:
         TDPerColor = getPaletteTD(layerColors)
     TDPerColor[0] = max(args.init_layer_height, TDPerColor[0]-args.init_layer_height)
@@ -322,7 +331,6 @@ if __name__ == '__main__':
     print("Processing image...")
     vertexColors = calcVertexColors(img)
     colors, depths, values = calcVertexInfo(vertexColors, layerColors, TDPerColor[:len(layerColors)]/LAYER_HEIGHT, LAYER_HEIGHT)
-    # exit()
 
     print("Computing mesh...")
     faces, vertices, vertexColors = genMesh(w, h)
@@ -347,6 +355,7 @@ if __name__ == '__main__':
     print(f"Print size: {round(width,2)} x {round(height,2)} x {round(depthMax-depthMin,2)} mm")
     cumLayer = np.cumsum([e[1] for e in palette])
     print("")
+    # print(f"TD for each color: {TDPerColor}")
     print(f"Start color: {normColor2Hex(palette[0][0])}")
     for i in range(1, len(palette)):
         print(f"Filament change at layer {cumLayer[i-1]+2} to {normColor2Hex(palette[i][0])}")

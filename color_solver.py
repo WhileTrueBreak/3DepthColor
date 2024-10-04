@@ -1,16 +1,20 @@
+import os
 import cv2
 import csv
-import math
 import sys
+import math
 import time
 import numpy as np
 import itertools
 import colorsys
 import argparse
 from skimage import io, color
+from hashlib import sha256
 from sklearn.cluster import KMeans
+from sklearn.cluster import SpectralClustering
 from scipy.optimize import minimize
 from concurrent.futures import ThreadPoolExecutor
+from threadpoolctl import threadpool_limits
 import matplotlib.pyplot as plt
 
 def colorRatioSolver(color, p1, p2):
@@ -272,7 +276,6 @@ def layerObjective(cSet, points, llr):
 
     pl1Diff = cSet[:,None] - l1[None,:]
     du = np.sum(lDiff**2, axis=1) # square dist
-    avgHD = np.sqrt(du)/(4*cSamples) # average dist along line given samples
 
     nu = np.sum(pl1Diff*lDiff, axis=2)
     u = np.zeros(nu.shape)
@@ -280,8 +283,23 @@ def layerObjective(cSet, points, llr):
     uClip = np.clip(u, 0, 1) # ratio along line 
     distVec = pl1Diff-uClip[:,:,None]*lDiff
     sqDist = np.sum(distVec**2, axis=2)
-    # dist = np.sqrt(sqDist)
-    adjDist = np.sqrt(avgHD[None,:]**2+sqDist) # adjusted distance via avg hoz dist
+
+    # df2 = lambda r:3*r**2-6*r+3
+    uAjd = 3*uClip**2-6*uClip+3
+
+    avgHD = np.sqrt(du)/(4*cSamples) # average dist along line given samples
+    avgHD = avgHD[None,:]
+    # print(uAjd)
+    # print(avgHD)
+    adjDist = np.sqrt(avgHD**2+sqDist) # adjusted distance via avg hoz dist
+    # print(adjDist)
+
+
+    # print(u.shape)
+    # print(uAjd.shape)
+    # print(avgHD.shape)
+
+    # exit()
 
     minDistArg = np.argmin(adjDist, axis=1)
     minDist = adjDist[np.arange(len(minDistArg)),minDistArg]
@@ -290,23 +308,32 @@ def layerObjective(cSet, points, llr):
 def getImgColors(img, numColors=1000):
     kImg = scaleImg(img, numColors*100)
     imgColors = kImg.reshape(-1,3)
-    kmeans = KMeans(n_clusters=numColors, random_state=0)
-    kmeans.fit(imgColors)
-    colors = kmeans.cluster_centers_
+
+    with threadpool_limits(limits=1):
+        kmeans = KMeans(n_clusters=numColors, random_state=42)
+        kmeans.fit(imgColors)
+        colors = kmeans.cluster_centers_
     sortIndex = np.argsort(colors[:,0])
     colors = colors[sortIndex,:]
     colors = np.clip(colors, 0, 1)
     return colors
 
-def colorGradientMatch(img, filaments, layerHeight=0.08, maxFilaments=4, maxIterations=10, threshold=0.001, change_threshold=1e-10):
+def colorGradientMatch(img, filaments, llr, maxFilaments=4, maxIterations=10, threshold=0.001, change_threshold=1e-10):
     colors = getImgColors(img)
     colors = np.apply_along_axis(color.rgb2lab, 1, colors)
 
     # objective = lambda x: avgPDistNP(colors, x.reshape(-1,3))
-    objective = lambda x: layerObjective(colors, x.reshape(-1,3), 125*layerHeight)
+    objective = lambda x: layerObjective(colors, x.reshape(-1,3), llr)
+    randLAB = lambda x: np.array([np.random.uniform(0,100), np.random.uniform(-128,127), np.random.uniform(-128,127)])
 
-    initGuess = np.array([50,0,0]*maxFilaments)
+    initGuess = np.repeat([[50,0,0]], maxFilaments, axis=0)
+    cycleInitGuess = np.copy(initGuess)
     bounds = np.array([[0,100],[-128,127],[-128,127]]*maxFilaments)
+
+    bestResult = None
+    bestErr = float('inf')
+
+    np.random.seed(42)
 
     counter = 0
     result = None
@@ -316,29 +343,28 @@ def colorGradientMatch(img, filaments, layerHeight=0.08, maxFilaments=4, maxIter
     while counter < maxIterations and (result == None or result.success == False or result.fun > threshold):
         if result:
             if prevErr - result.fun < change_threshold:
-                break
+                if result.fun < bestErr:
+                    bestResult = result
+                    bestErr = result.fun
+                cycleInitGuess = np.apply_along_axis(randLAB,1,np.copy(initGuess))
+                result = None
+                prevErr = float('inf')
+                # break
         prevErr = result.fun if result != None else float('inf')
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            # futureCOBYQA = executor.submit(minimize, objective, np.copy(initGuess.flatten()), method="COBYQA", bounds=bounds, tol=0)
-            futureSLSQP = executor.submit(minimize, objective, np.copy(initGuess.flatten()), method="SLSQP", bounds=bounds, tol=0)
-            # resultCOBYQA = futureCOBYQA.result()
-            resultSLSQP = futureSLSQP.result()
-        # if resultCOBYQA.fun < resultSLSQP.fun:
-        #     initGuess = resultCOBYQA.x
-        #     result = resultCOBYQA
-        # else:
-        #     initGuess = resultSLSQP.x
-        #     result = resultSLSQP
-        initGuess = resultSLSQP.x
+        sys.stderr = open(os.devnull, 'w')
+        resultSLSQP = minimize(objective, np.copy(cycleInitGuess.flatten()), method="SLSQP", bounds=bounds, tol=0)
+        sys.stderr = sys.__stderr__
+        cycleInitGuess = resultSLSQP.x
         result = resultSLSQP
         print(f"\rOptimizing [{" "*(l-len(str(counter+1)))}{counter+1}/{maxIterations}]", end='', flush=True)
         counter += 1
+
     print("")
     
-    avgPDistNP(colors, result.x.reshape(-1,3))
+    avgPDistNP(colors, bestResult.x.reshape(-1,3))
 
-    print(f"Done with sample err: {result.fun}")
-    path = result.x.reshape(-1,3)
+    print(f"Done with sample err: {bestResult.fun}")
+    path = bestResult.x.reshape(-1,3)
     path = np.apply_along_axis(color.lab2rgb, 1, path)
     return path
 

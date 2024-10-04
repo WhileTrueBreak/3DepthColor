@@ -292,7 +292,7 @@ if __name__ == '__main__':
     argparser.add_argument('-md', '--max-dim', help='max dimensions of model in mm', required=False, nargs=2, default=(MAX_WIDTH,MAX_HEIGHT), type=float)
     argparser.add_argument('-l', '--layer-height', help='height of layer', required=False, default=LAYER_HEIGHT, type=float)
     argparser.add_argument('-il', '--init-layer-height', help='height of the first layer', required=False, default=INIT_LAYER_HEIGHT, type=float)
-    argparser.add_argument('-llr', '--llr', help='factor influencing layer count', required=False, default=LUM_LAYER_FACTOR, type=float)
+    argparser.add_argument('-llr', '--llr', help=f'factor influencing layer count (higher is less layers) default={LUM_LAYER_FACTOR}', required=False, default=LUM_LAYER_FACTOR, type=float)
     args = argparser.parse_args()
 
     LAYER_HEIGHT = args.layer_height
